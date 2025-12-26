@@ -1,0 +1,106 @@
+package io.github.tomhula.jecnaapi.data.substitution
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+
+/**
+ * Response containing substitution schedule data.
+ */
+@Serializable
+data class SubstitutionResponse(
+    val schedule: List<Map<String, JsonElement>>,
+    val props: List<SubstitutionProp>,
+    val status: SubstitutionStatus
+)
+{
+    /**
+     * Returns absences for each day (same index as in [schedule]/[props]).
+     */
+    val absencesByDay: List<List<TeacherAbsence>> by lazy {
+        schedule.map { dayEntry ->
+            val rawAbsences = dayEntry["ABSENCE"]
+            if (rawAbsences == null || rawAbsences is JsonNull) emptyList() else
+            when (rawAbsences)
+            {
+                is JsonArray -> rawAbsences.mapNotNull { it.toTeacherAbsenceOrNull() }
+                else -> emptyList()
+            }
+        }
+    }
+
+    /**
+     * Returns absences for each day labeled with the corresponding date from [props].
+     *
+     * The list index still corresponds to the same index as in [schedule]/[props], but each
+     * element carries the date label for easier consumption.
+     */
+    val labeledAbsencesByDay: List<LabeledTeacherAbsences> by lazy {
+        // Prefer schedule length as the source of truth so every day has a label,
+        // even if props is missing/misaligned.
+        schedule.indices.map { index ->
+            val dateLabel = props.getOrNull(index)?.date ?: "(unknown date)"
+            val absences = absencesByDay.getOrNull(index).orEmpty()
+            LabeledTeacherAbsences(
+                date = dateLabel,
+                absences = absences
+            )
+        }
+    }
+}
+
+/**
+ * Container for teacher absences on a specific day.
+ *
+ * @property date The date string associated with this day, as provided by [SubstitutionProp].
+ * @property absences List of [TeacherAbsence] for this date.
+ */
+@Serializable
+data class LabeledTeacherAbsences(
+    val date: String,
+    val absences: List<TeacherAbsence>
+)
+
+/**
+ * Details about a teacher's absence.
+ */
+private fun JsonElement.toTeacherAbsenceOrNull(): TeacherAbsence?
+{
+    if (this !is JsonObject) return null
+
+    val teacher = this["teacher"]?.toString()?.trim('"')
+    val teacherCode = this["teacherCode"]?.toString()?.trim('"')
+    val type = this["type"]?.toString()?.trim('"') ?: return null
+    val hoursEl = this["hours"]
+
+    val hours = when
+    {
+        hoursEl == null || hoursEl is JsonNull -> null
+        hoursEl is JsonPrimitive && hoursEl.intOrNull != null -> AbsenceHours(hoursEl.int, null)
+        else ->
+        {
+            val obj = hoursEl.jsonObject
+            val from = obj["from"]?.toString()?.toIntOrNull()
+            val to = obj["to"]?.toString()?.toIntOrNull()
+            when
+            {
+                from == null -> null
+                to == null -> AbsenceHours(from, null)
+                else -> AbsenceHours(from, to)
+            }
+        }
+    }
+
+    return TeacherAbsence(
+        teacher = teacher,
+        teacherCode = teacherCode,
+        type = type,
+        hours = hours
+    )
+}

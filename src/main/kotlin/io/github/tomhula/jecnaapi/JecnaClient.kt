@@ -7,19 +7,27 @@ import io.ktor.http.*
 import io.github.tomhula.jecnaapi.data.notification.NotificationReference
 import io.github.tomhula.jecnaapi.data.schoolStaff.TeacherReference
 import io.github.tomhula.jecnaapi.data.timetable.TimetablePage
+import io.github.tomhula.jecnaapi.data.substitution.SubstitutionResponse
+import io.github.tomhula.jecnaapi.data.substitution.TeacherAbsence
+import io.github.tomhula.jecnaapi.data.substitution.LabeledTeacherAbsences
 import io.github.tomhula.jecnaapi.parser.parsers.*
 import io.github.tomhula.jecnaapi.util.JecnaPeriodEncoder
 import io.github.tomhula.jecnaapi.util.JecnaPeriodEncoder.jecnaEncode
 import io.github.tomhula.jecnaapi.util.SchoolYear
 import io.github.tomhula.jecnaapi.util.SchoolYearHalf
+import io.github.tomhula.jecnaapi.data.student.Locker
+import io.github.tomhula.jecnaapi.data.substitution.SubstitutionStatus
 import io.github.tomhula.jecnaapi.web.Auth
 import io.github.tomhula.jecnaapi.web.AuthenticationException
 import io.github.tomhula.jecnaapi.web.append
 import io.github.tomhula.jecnaapi.web.jecna.JecnaWebClient
 import io.github.tomhula.jecnaapi.web.jecna.Role
+import kotlinx.serialization.json.Json
 import java.time.Month
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+
+private val json = Json { ignoreUnknownKeys = true }
 
 /**
  * A client to access Jecna Web data.
@@ -87,13 +95,127 @@ class JecnaClient(
 
     suspend fun getGradesPage() = gradesPageParser.parse(queryStringBody(PageWebPath.grades))
 
-    suspend fun getTimetablePage(schoolYear: SchoolYear, periodOption: TimetablePage.PeriodOption? = null) =
-        timetablePageParser.parse(queryStringBody(PageWebPath.timetable, Parameters.build {
+    suspend fun getTimetablePage(
+        schoolYear: SchoolYear,
+        periodOption: TimetablePage.PeriodOption? = null,
+        withSubstitution: Boolean
+    ): TimetablePage
+    {
+        val page = timetablePageParser.parse(queryStringBody(PageWebPath.timetable, Parameters.build {
             append(schoolYear.jecnaEncode())
             periodOption?.let { append(it.jecnaEncode()) }
         }))
+        if (withSubstitution)
+        {
+            return fetchAndMergeSubstitutions(page)
+        }
+        return page
+    }
 
-    suspend fun getTimetablePage() = timetablePageParser.parse(queryStringBody(PageWebPath.timetable))
+    suspend fun getTimetablePage(
+        schoolYear: SchoolYear,
+        periodOption: TimetablePage.PeriodOption? = null,
+    ): TimetablePage
+    {
+        val page = timetablePageParser.parse(queryStringBody(PageWebPath.timetable, Parameters.build {
+            append(schoolYear.jecnaEncode())
+            periodOption?.let { append(it.jecnaEncode()) }
+        }))
+        return page
+    }
+
+    suspend fun getTimetablePage(): TimetablePage
+    {
+        val page = timetablePageParser.parse(queryStringBody(PageWebPath.timetable))
+        return page
+    }
+    
+    suspend fun getTimetablePage(withSubstitution: Boolean): TimetablePage
+    {
+        val page = timetablePageParser.parse(queryStringBody(PageWebPath.timetable))
+        if (!withSubstitution)
+        {
+            return page
+        }
+        return fetchAndMergeSubstitutions(page)
+    }
+
+    private suspend fun fetchAndMergeSubstitutions(page: TimetablePage): TimetablePage
+    {
+        return try
+        {
+            val substitutions = getSubstitutions()
+            val profile = getStudentProfile()
+            val className = profile.className
+            if (className != null)
+            {
+                page.mergeSubstitutions(substitutions, className)
+            }
+            else
+            {
+                page.copy(substitutionMessage = substitutions.status.message)
+            }
+        } catch (e: Exception)
+        {
+            page
+        }
+    }
+
+    suspend fun getSubstitutions(): SubstitutionResponse
+    {
+        return try
+        {
+            val response = webClient.plainQuery(PageWebPath.SUBSTITUTION_ENDPOINT)
+            json.decodeFromString(response.bodyAsText())
+        }
+        catch (e: Exception)
+        {
+            SubstitutionResponse(
+                schedule = emptyList(),
+                props = emptyList(),
+                status = SubstitutionStatus(
+                    lastUpdated = "",
+                    currentUpdateSchedule = 0,
+                    message = "Endpoint na suplování je nyní nedostupný!"
+                )
+            )
+        }
+    }
+
+    
+    /**
+     * Returns teacher absences from the substitution endpoint, labeled by date.
+     *
+     * Each element corresponds to one day and contains the date label (see [LabeledTeacherAbsences.date])
+     * together with the list of [TeacherAbsence] for that day.
+     */
+    suspend fun getTeacherAbsences(): List<LabeledTeacherAbsences>
+    {
+        val substitutions = getSubstitutions()
+
+        // If substitutions endpoint is down, getSubstitutions() returns an empty response with status.message
+        substitutions.status.message?.let { msg ->
+            if (substitutions.schedule.isEmpty() && substitutions.props.isEmpty())
+            {
+                return listOf(
+                    LabeledTeacherAbsences(
+                        date = "(unknown date)",
+                        absences = listOf(
+                            TeacherAbsence(
+                                teacher = null,
+                                teacherCode = "",
+                                type = "",
+                                hours = null,
+                                message = msg
+                            )
+                        )
+                    )
+                )
+            }
+        }
+
+        return substitutions.labeledAbsencesByDay
+    }
 
     suspend fun getAttendancesPage(schoolYear: SchoolYear, month: Month) = getAttendancesPage(schoolYear, month.value)
 
@@ -153,7 +275,8 @@ class JecnaClient(
      * @throws AuthenticationException When the query fails because user is not authenticated.
      * @return The [HttpResponse].
      */
-    suspend fun queryStringBody(path: String, parameters: Parameters? = null) = webClient.queryStringBody(path, parameters)
+    suspend fun queryStringBody(path: String, parameters: Parameters? = null) =
+        webClient.queryStringBody(path, parameters)
 
     /** Closes the HTTP client. */
     fun close() = webClient.close()
@@ -173,6 +296,7 @@ class JecnaClient(
             const val student = "/student"
             const val locker = "/locker/student"
             const val classrooms = "/ucebna"
+            const val SUBSTITUTION_ENDPOINT = "https://jecnarozvrh.jzitnik.dev/versioned/v1"
         }
     }
 }
