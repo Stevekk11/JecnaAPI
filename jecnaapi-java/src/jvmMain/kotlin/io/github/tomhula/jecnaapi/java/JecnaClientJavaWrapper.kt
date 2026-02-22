@@ -1,20 +1,21 @@
 package io.github.tomhula.jecnaapi.java
 
 import io.github.tomhula.jecnaapi.JecnaClient
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.future.future
 import io.github.tomhula.jecnaapi.WebJecnaClient
-import io.github.tomhula.jecnaapi.data.room.RoomReference
+import io.github.tomhula.jecnaapi.data.examTopics.ExamTopicCategoryReference
 import io.github.tomhula.jecnaapi.data.notification.NotificationReference
+import io.github.tomhula.jecnaapi.data.room.RoomReference
 import io.github.tomhula.jecnaapi.data.schoolStaff.TeacherReference
 import io.github.tomhula.jecnaapi.data.timetable.TimetablePage
 import io.github.tomhula.jecnaapi.util.SchoolYear
 import io.github.tomhula.jecnaapi.util.SchoolYearHalf
 import io.github.tomhula.jecnaapi.web.Auth
 import io.github.tomhula.jecnaapi.web.AuthenticationException
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.future.future
 import kotlinx.datetime.Month
 import kotlin.time.ExperimentalTime
 
@@ -62,7 +63,13 @@ class JecnaClientJavaWrapper(autoLogin: Boolean = false)
     fun getNotifications() = GlobalScope.future { wrappedClient.getNotifications() }
     fun getRoomsPage() = GlobalScope.future { wrappedClient.getRoomsPage() }
     fun getRoom(roomReference: RoomReference) = GlobalScope.future { wrappedClient.getRoom(roomReference) }
-    fun getRoom(roomCode: String) = GlobalScope.future { wrappedClient.getRoom(roomCode) } 
+    fun getRoom(roomCode: String) = GlobalScope.future { wrappedClient.getRoom(roomCode) }
+    fun getExamTopicsPage() = GlobalScope.future { wrappedClient.getExamTopicsPage() }
+    fun getExamTopicCategory(categoryUrl: String) =
+        GlobalScope.future { wrappedClient.getExamTopicCategory(categoryUrl) }
+
+    fun getExamTopicCategory(categoryReference: ExamTopicCategoryReference) =
+        GlobalScope.future { wrappedClient.getExamTopicCategory(categoryReference) } 
 
     /** A query without any authentication (autologin) handling. */
     fun plainQuery(path: String, parameters: Parameters? = null) =
