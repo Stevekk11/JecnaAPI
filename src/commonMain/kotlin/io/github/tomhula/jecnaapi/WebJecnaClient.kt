@@ -3,12 +3,14 @@ package io.github.tomhula.jecnaapi
 import com.fleeksoft.ksoup.Ksoup
 import com.fleeksoft.ksoup.nodes.Document
 import io.github.tomhula.jecnaapi.data.examTopics.ExamTopicCategory
+import io.github.tomhula.jecnaapi.data.examTopics.ExamTopicsPage
 import io.github.tomhula.jecnaapi.data.notification.NotificationReference
 import io.github.tomhula.jecnaapi.parser.parsers.*
 import io.github.tomhula.jecnaapi.util.JecnaPeriodEncoder
 import io.github.tomhula.jecnaapi.util.JecnaPeriodEncoder.jecnaEncode
 import io.github.tomhula.jecnaapi.util.SchoolYear
 import io.github.tomhula.jecnaapi.util.SchoolYearHalf
+import io.github.tomhula.jecnaapi.util.validateStudentIn4thGrade
 import io.github.tomhula.jecnaapi.web.Auth
 import io.github.tomhula.jecnaapi.web.AuthenticationException
 import io.ktor.client.*
@@ -39,7 +41,7 @@ class WebJecnaClient(
 ) : JecnaClient
 {
     val endpoint = endpoint.removeSuffix("/")
-    
+
     private val cookieStorage = AcceptAllCookiesStorage()
     private val httpClient = HttpClient {
         install(HttpCookies) { storage = cookieStorage }
@@ -60,11 +62,11 @@ class WebJecnaClient(
      * Is set to `null` on [logout].
      */
     var autoLoginAuth: Auth? = null
-    
+
     @OptIn(ExperimentalTime::class)
     var lastSuccessfulLoginTime: Instant? = null
         private set
-    
+
     /** Value may be incorrect if the session has expired */
     var role: Role? = null
         private set
@@ -134,47 +136,64 @@ class WebJecnaClient(
             append(schoolYear.jecnaEncode())
             append(schoolYearHalf.jecnaEncode())
         }))
+
     override suspend fun getGradesPage() = gradesPageParser.parse(queryStringBody(PageWebPath.GRADES))
     override suspend fun getTimetablePage(schoolYear: SchoolYear, periodId: Int?) =
         timetablePageParser.parse(queryStringBody(PageWebPath.TIMETABLE, Parameters.build {
             append(schoolYear.jecnaEncode())
             periodId?.let { append(JecnaPeriodEncoder.encodeTimetablePeriod(it)) }
         }))
+
     override suspend fun getTimetablePage() = timetablePageParser.parse(queryStringBody(PageWebPath.TIMETABLE))
     override suspend fun getAttendancesPage(schoolYear: SchoolYear, month: Month) =
         attendancesPageParser.parse(queryStringBody(PageWebPath.ATTENDANCES, Parameters.build {
             append(schoolYear.jecnaEncode())
             append(JecnaPeriodEncoder.encodeMonth(month))
         }))
+
     override suspend fun getAttendancesPage() = attendancesPageParser.parse(queryStringBody(PageWebPath.ATTENDANCES))
     override suspend fun getAbsencesPage(schoolYear: SchoolYear) =
         absencesPageParser.parse(queryStringBody(PageWebPath.ABSENCES, Parameters.build {
             append(schoolYear.jecnaEncode())
         }))
+
     override suspend fun getAbsencesPage() = absencesPageParser.parse(queryStringBody(PageWebPath.ABSENCES))
     override suspend fun getTeachersPage() = teachersPageParser.parse(queryStringBody(PageWebPath.TEACHERS))
-    override suspend fun getTeacher(teacherTag: String) = teacherParser.parse(queryStringBody("${PageWebPath.TEACHERS}/$teacherTag"))
+    override suspend fun getTeacher(teacherTag: String) =
+        teacherParser.parse(queryStringBody("${PageWebPath.TEACHERS}/$teacherTag"))
+
     override suspend fun getRoomsPage() = roomsPageParser.parse(queryStringBody(PageWebPath.ROOMS))
-    override suspend fun getRoom(roomCode: String) = roomParser.parse(queryStringBody("${PageWebPath.ROOMS}/${roomCode}"))
+    override suspend fun getRoom(roomCode: String) =
+        roomParser.parse(queryStringBody("${PageWebPath.ROOMS}/${roomCode}"))
+
     override suspend fun getLocker() = lockerPageParser.parse(queryStringBody(PageWebPath.LOCKER))
-    override suspend fun getStudentProfile(username: String) = studentProfileParser.parse(queryStringBody("${PageWebPath.STUDENT}/$username"))
-    override suspend fun getStudentProfile() = autoLoginAuth?.let { getStudentProfile(it.username)} ?: throw AuthenticationException()
-    override suspend fun getNotification(notification: NotificationReference) = notificationParser.getNotification(queryStringBody("${PageWebPath.NOTIFICATION}?userStudentRecordId=${notification.recordId}"))
+    override suspend fun getStudentProfile(username: String) =
+        studentProfileParser.parse(queryStringBody("${PageWebPath.STUDENT}/$username"))
+
+    override suspend fun getStudentProfile() =
+        autoLoginAuth?.let { getStudentProfile(it.username) } ?: throw AuthenticationException()
+
+    override suspend fun getNotification(notification: NotificationReference) =
+        notificationParser.getNotification(queryStringBody("${PageWebPath.NOTIFICATION}?userStudentRecordId=${notification.recordId}"))
+
     override suspend fun getNotifications() = notificationParser.parse(queryStringBody(PageWebPath.NOTIFICATIONS))
-    override suspend fun getExamTopicsPage() = examTopicsPageParser.parse(queryStringBody(PageWebPath.EXAM_TOPICS))
+    override suspend fun getExamTopicsPage(): ExamTopicsPage
+    {
+        validateStudentIn4thGrade(getStudentProfile())
+        return examTopicsPageParser.parse(queryStringBody(PageWebPath.EXAM_TOPICS))
+    }
+
     override suspend fun getExamTopicCategory(categoryUrl: String): ExamTopicCategory
     {
-        val html = queryStringBody(categoryUrl)
-        val doc = Ksoup.parse(html)
-        val name = doc.selectFirst("h1 .label")?.text() ?: ""
-        return examTopicCategoryParser.parse(html, name, categoryUrl)
+        validateStudentIn4thGrade(getStudentProfile())
+        return examTopicCategoryParser.parse(queryStringBody(categoryUrl), categoryUrl)
     }
 
     suspend fun setRole(role: Role)
     {
         /* Refer to Role section in /internal_docs/Jecna_server.md */
         setCookie("WTDGUID", ROLE_TO_WTDGUID_COOKIE_VALUE_MAP[role]!!)
-        //plainQuery("/user/role", parametersOf("role", role.value))
+        // plainQuery("/user/role", parametersOf("role", role.value))
         this.role = role
     }
 
@@ -199,7 +218,7 @@ class WebJecnaClient(
     suspend fun getSessionCookie() = getCookie(SESSION_ID_COOKIE_NAME)
 
     fun getUrlForPath(path: String) = endpoint + "/" + path.removePrefix("/")
-    
+
     /** A query without any authentication (autologin) handling. */
     suspend fun plainQuery(path: String, parameters: Parameters? = null): HttpResponse
     {
@@ -223,7 +242,8 @@ class WebJecnaClient(
         val response = plainQuery(path, parameters)
 
         /* No redirect to login. */
-        val locationHeader = response.headers[HttpHeaders.Location] ?: return response.also { autoLoginAttempted = false }
+        val locationHeader =
+            response.headers[HttpHeaders.Location] ?: return response.also { autoLoginAttempted = false }
 
         if (!locationHeader.startsWith("$endpoint/user/need-login"))
             return response.also { autoLoginAttempted = false }
@@ -259,14 +279,14 @@ class WebJecnaClient(
          * Using particularly this one, because it's the smallest => fastest to download.
          */
         const val LOGIN_TEST_PATH = "/user-student/record-list"
-        
+
         /* Refer to the Role section in /internal_docs/Jecna_server.md */
         val ROLE_TO_WTDGUID_COOKIE_VALUE_MAP = mapOf(
             Role.INTERESTED to "0",
             Role.STUDENT to "10",
             Role.EMPLOYEE to "100"
         )
-        
+
         private object PageWebPath
         {
             const val NEWS = "/akce"

@@ -8,11 +8,14 @@ import io.github.tomhula.jecnaapi.parser.ParseException
 
 internal object ExamTopicCategoryParser
 {
-    fun parse(html: String, name: String, url: String): ExamTopicCategory
+    fun parse(html: String, url: String): ExamTopicCategory
     {
         try
         {
             val doc: Document = Ksoup.parse(html)
+
+            val name = doc.selectFirst("h1 .label")?.text()?.trim() ?: ""
+            
             val categoryBuilder = ExamTopicCategory.builder(name, url)
 
             val listItemEles = doc.select("ul li .item .label")

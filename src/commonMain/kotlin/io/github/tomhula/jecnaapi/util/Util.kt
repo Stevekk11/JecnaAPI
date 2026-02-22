@@ -1,5 +1,7 @@
 package io.github.tomhula.jecnaapi.util
 
+import io.github.tomhula.jecnaapi.data.student.Student
+import io.github.tomhula.jecnaapi.parser.ParseException
 import kotlinx.datetime.DayOfWeek
 import kotlinx.datetime.Month
 import kotlinx.datetime.isoDayNumber
@@ -53,3 +55,20 @@ fun <T, R> Iterable<T>.hasDuplicate(selector: (T) -> R): Boolean
  * @return The next [day][DayOfWeek] after this one.
  */
 fun DayOfWeek.next(): DayOfWeek = DayOfWeek(this.isoDayNumber % 7 + 1)
+
+/**
+ * Validates that the student is in 4th grade based on their class name.
+ * 
+ * @param student The student to validate
+ * @throws ParseException if the student is not in 4th grade or class name is null
+ */
+fun validateStudentIn4thGrade(student: Student)
+{
+    val className = student.className
+
+    if (className == null || !className.contains("4"))
+    {
+        throw ParseException("Student must be in 4th grade")
+    }
+}
+
